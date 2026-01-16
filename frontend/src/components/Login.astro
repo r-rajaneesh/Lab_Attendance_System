@@ -1,0 +1,112 @@
+---
+
+---
+
+<div class="login-modal">
+	<h1>Admin Login</h1>
+	<form
+		class="login-form"
+		id="login-form">
+		<input
+			type="text"
+			name="login_username"
+			id="login-username"
+			placeholder="Enter your Username"
+			required
+		/>
+		<input
+			type="password"
+			placeholder="Enter your Password"
+			name="login_password"
+			id="login-password"
+			required
+		/>
+		<input
+			type="submit"
+			id="login-submit"
+		/>
+	</form>
+</div>
+<script>
+	const LoginForm = document.getElementById("login-form") as HTMLFormElement;
+	LoginForm?.addEventListener("submit", async (ev) => {
+		ev.preventDefault();
+		const LoginDetails = new FormData(LoginForm);
+		const LoginDetailsData = Object.fromEntries(LoginDetails.entries());
+		console.log(LoginDetailsData);
+		const loginRes = await fetch("http://localhost:5432/admin-login", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(LoginDetailsData),
+			credentials: "include",
+		});
+		const data = await loginRes.json();
+		if (loginRes.ok) {
+			window.location.href = data.redirectUrl;
+		}
+		console.log(loginRes);
+	});
+</script>
+<style>
+	.login-modal {
+		display: flex;
+		grid-area: main;
+		align-items: center;
+		justify-content: center;
+		flex-direction: column;
+		margin-top: 4rem;
+		.login-form {
+			display: flex;
+			gap: 1rem;
+			width: 20vw;
+			height: auto;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			label {
+				display: flex;
+				flex-direction: column;
+				align-self: flex-start;
+				font-size: 0.8rem;
+				margin-left: -0.4rem;
+				.default-message {
+					color: #0a0a0a;
+				}
+				.error-message {
+					color: #ff5500;
+				}
+			}
+			input {
+				border: none;
+				width: 100%;
+				padding: 0.6rem;
+				border-radius: 0.4rem;
+				background-color: #f4f4f4;
+				box-shadow: #000000 0rem 0rem 0.2rem;
+				&:active,
+				&:focus {
+					/* outline: none; */
+					outline: 0.2rem solid #4d7ffe;
+					box-shadow: #000000 0rem 0rem 0.1rem;
+					border: none;
+				}
+				&[type="submit"] {
+					cursor: pointer;
+					color: #ffffff;
+					font-weight: 600;
+					background-color: #09d209;
+					&:hover {
+						background-color: #08c908;
+					}
+					&:active,
+					&:focus {
+						outline: none;
+						border: none;
+					}
+				}
+			}
+		}
+	}
+</style>

@@ -1,0 +1,59 @@
+---
+import Image from "astro/components/Image.astro";
+import srec from "../assets/srec-logo.svg";
+import snr from "../assets/snr.svg";
+---
+
+<header class="header">
+	<div class="image-holder">
+		<Image
+			src={srec}
+			alt="SREC Logo"
+		/>
+	</div>
+	<div class="content-holder">
+		<h2>Laboratory Attendance System</h2>
+	</div>
+	<div class="image-holder">
+		<Image
+			src={snr}
+			alt="SNR Logo"
+		/>
+	</div>
+</header>
+<style>
+	.header {
+		display: flex;
+		height: 6rem;
+		grid-area: header;
+		align-items: center;
+		justify-content: space-between;
+		margin: 1rem;
+		border-radius: 2rem;
+		padding: 1rem;
+		width: auto;
+		box-shadow: #0a0a0a 0rem 0rem 0.4rem;
+		.content-holder {
+			color: #0a0a0a;
+			font-weight: 800;
+			font-size: 1.2rem;
+			margin-left: 24rem;
+			position: absolute;
+			font-family: system-ui;
+			letter-spacing: 0.2rem;
+			font-variant-caps: all-petite-caps;
+		}
+		.image-holder {
+			align-self: center;
+			height: 6rem;
+			width: auto;
+			gap: 1rem;
+			img {
+				height: 100%;
+				width: auto;
+				object-fit: cover;
+				flex: 1;
+			}
+		}
+	}
+</style>

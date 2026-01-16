@@ -1,0 +1,654 @@
+---
+---
+
+<div
+	class="attendance-container"
+	id="attendance-app">
+	<div class="control-bar">
+		<div class="date-controls">
+			<button
+				id="btn-prev-day"
+				class="icon-btn"
+				aria-label="Previous Day"
+				>←</button
+			>
+			<input
+				type="date"
+				id="date-picker"
+			/>
+			<button
+				id="btn-next-day"
+				class="icon-btn"
+				aria-label="Next Day"
+				>→</button
+			>
+		</div>
+
+		<div class="search-controls">
+			<input
+				type="text"
+				id="search-input"
+				placeholder="Search Name, Roll No..."
+			/>
+			<select id="page-size-select">
+				<option value="5">5 rows</option>
+				<option
+					value="10"
+					selected
+					>10 rows</option
+				>
+				<option value="20">20 rows</option>
+				<option value="50">50 rows</option>
+			</select>
+		</div>
+
+		<div class="actions">
+			<button
+				id="btn-refresh"
+				class="secondary-btn"
+				>Refresh</button
+			>
+			<button
+				id="btn-reset"
+				class="secondary-btn"
+				>Reset View</button
+			>
+			<button
+				id="btn-export"
+				class="primary-btn"
+				>Export XLSX</button
+			>
+		</div>
+	</div>
+
+	<div class="table-wrapper">
+		<table id="main-table">
+			<thead>
+				<tr id="table-headers">
+					<th data-sort="timestamp">Timestamp (IST) <span class="sort-icon"></span></th>
+					<th data-sort="entryTime">Entry Time (IST) <span class="sort-icon"></span></th>
+					<th data-sort="exitTime">Exit Time (IST) <span class="sort-icon"></span></th>
+					<th data-sort="rollNo">Roll Number <span class="sort-icon"></span></th>
+					<th data-sort="name">Name <span class="sort-icon"></span></th>
+					<th data-sort="purpose">Purpose <span class="sort-icon"></span></th>
+				</tr>
+			</thead>
+			<tbody id="table-body"> </tbody>
+		</table>
+	</div>
+
+	<div class="pagination-footer">
+		<span id="page-info">Showing 0-0 of 0</span>
+		<div class="page-nav">
+			<button
+				id="btn-prev-page"
+				disabled
+				>Prev</button
+			>
+			<button
+				id="btn-next-page"
+				disabled
+				>Next</button
+			>
+		</div>
+	</div>
+</div>
+
+<script>
+	import * as XLSX from "xlsx";
+	import moment from "moment-timezone";
+
+	interface TAttendanceRaw {
+		id: string;
+		timestamp: number;
+		rollNo: string;
+		name: string;
+		entryTime: number;
+		exitTime: number;
+		purpose: string;
+	}
+
+	interface TBackendRow {
+		id?: string;
+		attendance_name: string;
+		attendance_rollno: string;
+		attendance_purpose: string;
+		entry_time: string;
+		exit_time: string;
+		timestamp: string;
+	}
+
+	interface TAppState {
+		currentDate: moment.Moment;
+		searchQuery: string;
+		pageSize: number;
+		currentPage: number;
+		sortCol: keyof TAttendanceRaw | null;
+		sortAsc: boolean;
+		data: TAttendanceRaw[];
+	}
+
+	const debounce = (fn: Function, ms: number) => {
+		let timeoutId: ReturnType<typeof setTimeout>;
+		return function (this: any, ...args: any[]) {
+			clearTimeout(timeoutId);
+			timeoutId = setTimeout(() => fn.apply(this, args), ms);
+		};
+	};
+
+	const getAttendanceData = async (dateStr: string, limit: number): Promise<any> => {
+		try {
+			const url = new URL("http://localhost:5432/get-attendance");
+			url.searchParams.append("date", dateStr);
+			url.searchParams.append("limit", limit.toString());
+
+			const response = await fetch(url.toString(), {
+				method: "GET",
+				headers: { "Content-Type": "application/json" },
+				credentials: "include",
+			});
+
+			if (response.status === 401) {
+				console.warn("Session expired. Redirecting...");
+				window.location.href = "/";
+				return null;
+			}
+
+			if (!response.ok) {
+				throw new Error(`Server Error: ${response.status}`);
+			}
+
+			return await response.json();
+		} catch (error) {
+			console.error("Fetch failed:", error);
+			return null;
+		}
+	};
+
+	class AttendanceManager {
+		state: TAppState;
+		readonly TIMEZONE = "Asia/Kolkata";
+
+		elements = {
+			tbody: document.getElementById("table-body") as HTMLTableSectionElement,
+			datePicker: document.getElementById("date-picker") as HTMLInputElement,
+			searchInput: document.getElementById("search-input") as HTMLInputElement,
+			pageSize: document.getElementById("page-size-select") as HTMLSelectElement,
+			pageInfo: document.getElementById("page-info") as HTMLSpanElement,
+			prevPage: document.getElementById("btn-prev-page") as HTMLButtonElement,
+			nextPage: document.getElementById("btn-next-page") as HTMLButtonElement,
+			headers: document.querySelectorAll("#table-headers th"),
+		};
+
+		handleSearchInput = debounce((query: string) => {
+			this.state.searchQuery = query;
+			this.state.currentPage = 1;
+			this.render();
+		}, 500);
+
+		constructor() {
+			this.state = {
+				currentDate: moment.utc().startOf("day"),
+				searchQuery: "",
+				pageSize: 10,
+				currentPage: 1,
+				sortCol: "entryTime",
+				sortAsc: true,
+				data: [],
+			};
+
+			this.initListeners();
+			this.loadData();
+		}
+
+
+		renderStatusRow(message: string, isError: boolean = false) {
+			this.elements.tbody.innerHTML = "";
+
+			const tr = document.createElement("tr");
+			const td = document.createElement("td");
+
+			td.colSpan = 6;
+			td.textContent = message;
+			td.style.textAlign = "center";
+			td.style.padding = "2rem";
+
+			if (isError) {
+				td.style.color = "red";
+			} else {
+				td.style.color = "#888";
+			}
+
+			tr.appendChild(td);
+			this.elements.tbody.appendChild(tr);
+		}
+
+
+		createCell(text: string, className?: string): HTMLTableCellElement {
+			const td = document.createElement("td");
+			td.textContent = text;
+			if (className) td.classList.add(className);
+			return td;
+		}
+
+
+		async loadData() {
+			this.renderStatusRow("Refreshing Data...");
+
+
+			const dateParam = this.formatInputDate(this.state.currentDate);
+			const rawResponse = await getAttendanceData(dateParam, 100);
+
+			if (rawResponse) {
+
+				if (rawResponse.message === "WIP") {
+					this.renderStatusRow("Backend API is Work In Progress 🚧", false);
+					return;
+				}
+
+				let validRows: TBackendRow[] = [];
+
+				// Robust check for array location
+				if (Array.isArray(rawResponse)) {
+					validRows = rawResponse;
+				} else if (rawResponse.rows && Array.isArray(rawResponse.rows)) {
+					validRows = rawResponse.rows;
+				} else if (rawResponse.data && Array.isArray(rawResponse.data)) {
+					validRows = rawResponse.data;
+				} else {
+					console.error("Invalid Data Structure", rawResponse);
+					this.renderStatusRow("Error: Invalid Data Format from Server", true);
+					return;
+				}
+
+				this.state.data = validRows.map((row, index) => ({
+					id: row.id || `row-${index}`,
+
+					name: row.attendance_name || (row as any).name || "Unknown",
+					rollNo: row.attendance_rollno || (row as any).rollno || "Unknown",
+					purpose: row.attendance_purpose || (row as any).purpose || "-",
+					timestamp: Number(row.timestamp),
+					entryTime: Number(row.entry_time || (row as any).entrytime),
+					exitTime: Number(row.exit_time || (row as any).exittime),
+				}));
+
+				this.render();
+			} else {
+				this.renderStatusRow("Failed to load data", true);
+			}
+		}
+
+		formatDateDisplay(ms: number): string {
+			return moment(ms).tz(this.TIMEZONE).format("DD/MM/YYYY");
+		}
+
+		formatTimeDisplay(ms: number): string {
+			return moment(ms).tz(this.TIMEZONE).format("hh:mm A");
+		}
+
+		formatInputDate(m: moment.Moment): string {
+			return m.format("YYYY-MM-DD");
+		}
+
+		getProcessedData() {
+			const startOfDay = this.state.currentDate.clone().startOf("day").valueOf();
+			const endOfDay = this.state.currentDate.clone().endOf("day").valueOf();
+
+			let processed = this.state.data.filter((row) => {
+				return row.timestamp >= startOfDay && row.timestamp <= endOfDay;
+			});
+
+			if (this.state.searchQuery) {
+				const q = this.state.searchQuery.toLowerCase();
+				processed = processed.filter(
+					(row) =>
+						row.name.toLowerCase().includes(q) || row.rollNo.includes(q) || row.purpose.toLowerCase().includes(q),
+				);
+			}
+
+			if (this.state.sortCol) {
+				processed.sort((a, b) => {
+					const valA = a[this.state.sortCol!];
+					const valB = b[this.state.sortCol!];
+					if (valA < valB) return this.state.sortAsc ? -1 : 1;
+					if (valA > valB) return this.state.sortAsc ? 1 : -1;
+					return 0;
+				});
+			}
+
+			return processed;
+		}
+
+		render() {
+			this.elements.datePicker.value = this.formatInputDate(this.state.currentDate);
+
+			const allFiltered = this.getProcessedData();
+			const total = allFiltered.length;
+			const start = (this.state.currentPage - 1) * this.state.pageSize;
+			const end = start + this.state.pageSize;
+			const pageSlice = allFiltered.slice(start, end);
+
+			this.elements.tbody.innerHTML = "";
+			const frag = document.createDocumentFragment();
+
+			if (pageSlice.length === 0) {
+				const tr = document.createElement("tr");
+				const td = document.createElement("td");
+				td.colSpan = 6;
+				td.textContent = "No Records Found";
+				td.style.textAlign = "center";
+				td.style.padding = "2rem";
+				td.style.color = "#888";
+				tr.appendChild(td);
+				frag.appendChild(tr);
+			} else {
+				pageSlice.forEach((row) => {
+					const tr = document.createElement("tr");
+					tr.classList.add("fade-in");
+
+					tr.appendChild(this.createCell(row.timestamp.toString()));
+					tr.appendChild(this.createCell(this.formatTimeDisplay(row.entryTime)));
+					tr.appendChild(this.createCell(this.formatTimeDisplay(row.exitTime)));
+					tr.appendChild(this.createCell(row.rollNo, "mono"));
+					tr.appendChild(this.createCell(row.name, "bold"));
+					tr.appendChild(this.createCell(row.purpose));
+
+					frag.appendChild(tr);
+				});
+			}
+			this.elements.tbody.appendChild(frag);
+
+			this.elements.pageInfo.innerText =
+				total > 0 ? `Showing ${start + 1}-${Math.min(end, total)} of ${total}` : "No Data";
+
+			this.elements.prevPage.disabled = this.state.currentPage === 1;
+			this.elements.nextPage.disabled = end >= total;
+
+			this.elements.headers.forEach((th) => {
+				const key = th.getAttribute("data-sort");
+				const span = th.querySelector(".sort-icon") as HTMLElement;
+				span.textContent = "";
+				if (key === this.state.sortCol) {
+					span.textContent = this.state.sortAsc ? " ▲" : " ▼";
+				}
+			});
+		}
+
+		initListeners() {
+			const changeDate = (offset: number) => {
+				this.state.currentDate.add(offset, "days");
+				this.state.currentPage = 1;
+				this.loadData();
+			};
+			document.getElementById("btn-prev-day")?.addEventListener("click", () => changeDate(-1));
+			document.getElementById("btn-next-day")?.addEventListener("click", () => changeDate(1));
+
+			this.elements.datePicker.addEventListener("change", (e) => {
+				const val = (e.target as HTMLInputElement).value;
+				if (val) {
+					this.state.currentDate = moment.utc(val, "YYYY-MM-DD");
+					this.state.currentPage = 1;
+					this.loadData();
+				}
+			});
+
+			this.elements.searchInput.addEventListener("input", (e) => {
+				const val = (e.target as HTMLInputElement).value;
+				this.handleSearchInput(val);
+			});
+
+			this.elements.pageSize.addEventListener("change", (e) => {
+				this.state.pageSize = parseInt((e.target as HTMLSelectElement).value);
+				this.state.currentPage = 1;
+				this.render();
+			});
+
+			this.elements.prevPage.addEventListener("click", () => {
+				if (this.state.currentPage > 1) {
+					this.state.currentPage--;
+					this.render();
+				}
+			});
+			this.elements.nextPage.addEventListener("click", () => {
+				this.state.currentPage++;
+				this.render();
+			});
+
+			this.elements.headers.forEach((th) => {
+				th.addEventListener("click", () => {
+					const key = th.getAttribute("data-sort") as keyof TAttendanceRaw;
+					if (this.state.sortCol === key) {
+						this.state.sortAsc = !this.state.sortAsc;
+					} else {
+						this.state.sortCol = key;
+						this.state.sortAsc = true;
+					}
+					this.render();
+				});
+			});
+
+			document.getElementById("btn-refresh")?.addEventListener("click", () => {
+				this.loadData();
+			});
+
+			document.getElementById("btn-reset")?.addEventListener("click", () => {
+				this.state.currentDate = moment.utc().startOf("day");
+				this.state.searchQuery = "";
+				this.state.pageSize = 10;
+				this.state.currentPage = 1;
+				this.state.sortCol = "entryTime";
+				this.state.sortAsc = true;
+				this.elements.searchInput.value = "";
+				this.elements.pageSize.value = "10";
+				this.loadData();
+			});
+
+			document.getElementById("btn-export")?.addEventListener("click", () => {
+				const data = this.getProcessedData().map((row) => ({
+					Date: this.formatDateDisplay(row.timestamp),
+					"Roll No": row.rollNo,
+					Name: row.name,
+					Entry: this.formatTimeDisplay(row.entryTime),
+					Exit: this.formatTimeDisplay(row.exitTime),
+					Purpose: row.purpose,
+				}));
+				const ws = XLSX.utils.json_to_sheet(data);
+				const wb = XLSX.utils.book_new();
+				XLSX.utils.book_append_sheet(wb, ws, "Attendance");
+				XLSX.writeFile(wb, `Attendance_${this.formatInputDate(this.state.currentDate)}.xlsx`);
+			});
+		}
+	}
+
+	document.addEventListener("DOMContentLoaded", () => {
+		new AttendanceManager();
+	});
+</script>
+
+<style>
+	/* ... (Same CSS as previous steps) ... */
+	.attendance-container {
+		font-family: "Inter", system-ui, sans-serif;
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		width: 90vw;
+		max-width: 1200px;
+		margin: 0 auto;
+		padding: 1rem;
+		grid-area: main;
+
+		.control-bar {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 1rem;
+			justify-content: space-between;
+			align-items: center;
+			background: #f8f9fa;
+			padding: 1rem;
+			border-radius: 12px;
+			box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+
+			.date-controls {
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+
+				input {
+					padding: 0.5rem;
+					border: 1px solid #ddd;
+					border-radius: 6px;
+				}
+			}
+
+			.search-controls {
+				display: flex;
+				gap: 0.5rem;
+				flex-grow: 1;
+				max-width: 500px;
+
+				input {
+					flex-grow: 1;
+					padding: 0.5rem 1rem;
+					border: 1px solid #ddd;
+					border-radius: 6px;
+				}
+				select {
+					padding: 0.5rem;
+					border-radius: 6px;
+					border: 1px solid #ddd;
+				}
+			}
+
+			.actions {
+				display: flex;
+				gap: 0.5rem;
+			}
+		}
+
+		.table-wrapper {
+			background: white;
+			border-radius: 12px;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+			overflow: hidden;
+			border: 1px solid #eee;
+
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				text-align: left;
+
+				th {
+					background: #f1f3f5;
+					padding: 1rem;
+					font-weight: 600;
+					color: #495057;
+					cursor: pointer;
+					user-select: none;
+					transition: background 0.2s;
+
+					&:hover {
+						background: #e9ecef;
+					}
+				}
+
+				td {
+					padding: 1rem;
+					border-bottom: 1px solid #f1f3f5;
+					color: #212529;
+				}
+
+				tr:nth-child(even) {
+					background-color: #fcfcfc;
+				}
+
+				tr:hover {
+					background-color: #f8f9fa;
+				}
+			}
+		}
+
+		.pagination-footer {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 0 1rem;
+			color: #6c757d;
+			font-size: 0.9rem;
+
+			.page-nav button {
+				padding: 0.4rem 1rem;
+				margin-left: 0.5rem;
+				border: 1px solid #ddd;
+				background: white;
+				border-radius: 4px;
+				cursor: pointer;
+
+				&:disabled {
+					opacity: 0.5;
+					cursor: not-allowed;
+				}
+				&:hover:not(:disabled) {
+					background: #f1f3f5;
+				}
+			}
+		}
+
+		.icon-btn {
+			background: white;
+			border: 1px solid #ddd;
+			width: 32px;
+			height: 32px;
+			border-radius: 6px;
+			cursor: pointer;
+			display: grid;
+			place-items: center;
+		}
+
+		.primary-btn {
+			background: #228be6;
+			color: white;
+			border: none;
+			padding: 0.5rem 1rem;
+			border-radius: 6px;
+			cursor: pointer;
+			&:hover {
+				background: #1c7ed6;
+			}
+		}
+
+		.secondary-btn {
+			background: transparent;
+			color: #495057;
+			border: 1px solid #ddd;
+			padding: 0.5rem 1rem;
+			border-radius: 6px;
+			cursor: pointer;
+			&:hover {
+				background: #f1f3f5;
+			}
+		}
+
+		.mono {
+			font-family: "Menlo", monospace;
+			font-size: 0.9em;
+		}
+		.bold {
+			font-weight: 600;
+		}
+
+		@keyframes fadeIn {
+			from {
+				opacity: 0;
+				transform: translateY(5px);
+			}
+			to {
+				opacity: 1;
+				transform: translateY(0);
+			}
+		}
+		.fade-in {
+			animation: fadeIn 0.2s ease-out forwards;
+		}
+	}
+</style>

@@ -1,0 +1,381 @@
+---
+// attendanceForm.astro
+import moment from "moment";
+
+// Get current local time for the "Entry Time" default value (HH:mm format)
+const currentLocalTime = moment().format("HH:mm");
+---
+
+<div class="attendance-modal">
+	<h1>Lab Attendance Portal</h1>
+
+	<form
+		class="attendance-form"
+		id="submit-attendance">
+		<div class="input-group">
+			<label for="attendance_name">
+				<span class="default-message">Full Name</span>
+				<span
+					class="error-message"
+					id="err-name"
+					hidden>
+					Alphabets only
+				</span>
+			</label>
+			<input
+				type="text"
+				id="attendance_name"
+				name="attendance_name"
+				placeholder="Enter your name"
+				required
+			/>
+		</div>
+
+		<div class="input-group">
+			<label for="attendance_rollno">
+				<span class="default-message">Roll Number</span>
+				<span
+					class="error-message"
+					id="err-roll"
+					hidden>
+					Must be 11 digits
+				</span>
+			</label>
+			<input
+				type="text"
+				id="attendance_rollno"
+				name="attendance_rollno"
+				placeholder="Ex: 71812405116"
+				maxlength="11"
+				inputmode="numeric"
+				required
+			/>
+		</div>
+
+		<div class="input-group">
+			<label for="attendance_purpose">
+				<span class="default-message">Purpose in Lab</span>
+			</label>
+			<input
+				type="text"
+				id="attendance_purpose"
+				name="attendance_purpose"
+				placeholder="Ex: OS Lab Experiment"
+				maxlength="30"
+				required
+			/>
+		</div>
+
+		<div class="time-row">
+			<div class="input-group">
+				<label for="entry_time">
+					<span class="default-message">Entry Time</span>
+				</label>
+				<input
+					type="time"
+					id="entry_time"
+					name="entry_time"
+					value={currentLocalTime}
+					readonly
+					required
+				/>
+			</div>
+
+			<div class="input-group">
+				<label for="exit_time">
+					<span class="default-message">Exit Time</span>
+					<span
+						class="error-message"
+						id="err-time"
+						hidden>
+						Invalid time
+					</span>
+				</label>
+				<input
+					type="time"
+					id="exit_time"
+					name="exit_time"
+					required
+				/>
+			</div>
+		</div>
+
+		<input
+			type="submit"
+			id="submit-btn"
+			value="Submit Attendance"
+		/>
+	</form>
+
+	<div
+		hidden
+		id="close-message"
+		class="success-message">
+		<h3>Attendance Submitted Successfully</h3>
+		<p>You may now close this window.</p>
+	</div>
+</div>
+
+<script>
+	import moment from "moment";
+
+	const attendanceForm = document.getElementById("submit-attendance") as HTMLFormElement;
+	const successMsg = document.getElementById("close-message") as HTMLDivElement;
+	const submitBtn = document.getElementById("submit-btn") as HTMLInputElement;
+
+	const inputs = {
+		name: document.getElementById("attendance_name") as HTMLInputElement,
+		roll: document.getElementById("attendance_rollno") as HTMLInputElement,
+		purpose: document.getElementById("attendance_purpose") as HTMLInputElement,
+		entry: document.getElementById("entry_time") as HTMLInputElement,
+		exit: document.getElementById("exit_time") as HTMLInputElement,
+	};
+
+	const errors = {
+		name: document.getElementById("err-name"),
+		roll: document.getElementById("err-roll"),
+		time: document.getElementById("err-time"),
+	};
+
+	// --- Validation Logic ---
+	const checkValidation = () => {
+		let isValid = true;
+		const valName = inputs.name.value.trim();
+		const valRoll = inputs.roll.value.trim();
+		const valEntry = moment().format("HH:mm");
+		const valExit = inputs.exit.value;
+		console.log(valEntry, valExit);
+
+		// Name Validation
+		const nameRegex = /^[a-zA-Z\s]+$/;
+		if (!valName || !nameRegex.test(valName)) {
+			errors.name?.removeAttribute("hidden");
+			isValid = false;
+		} else {
+			errors.name?.setAttribute("hidden", "true");
+		}
+
+		// Roll Validation
+		const rollRegex = /^\d{11}$/;
+		if (!valRoll || !rollRegex.test(valRoll)) {
+			errors.roll?.removeAttribute("hidden");
+			isValid = false;
+		} else {
+			errors.roll?.setAttribute("hidden", "true");
+		}
+
+		// Time Validation
+		if (!valExit) {
+			isValid = false;
+		} else if (valEntry) {
+			const mEntry = moment(valEntry, "HH:mm");
+			const mExit = moment(valExit, "HH:mm");
+
+			if (mExit.isBefore(mEntry)) {
+				errors.time?.removeAttribute("hidden");
+				isValid = false;
+			} else {
+				errors.time?.setAttribute("hidden", "true");
+			}
+		}
+
+		return isValid;
+	};
+
+	// --- UTC Helper ---
+	const toUtcTimestamp = (timeStr: string) => {
+		return moment(timeStr, "HH:mm").utc().valueOf().toString();
+	};
+
+	// --- Listeners ---
+	attendanceForm.addEventListener("input", () => checkValidation());
+
+	attendanceForm.addEventListener("submit", async (ev) => {
+		ev.preventDefault();
+
+		if (!checkValidation()) {
+			alert("Please fix the errors before submitting.");
+			return;
+		}
+
+		const details = {
+			attendance_name: inputs.name.value,
+			attendance_rollno: inputs.roll.value,
+			attendance_purpose: inputs.purpose.value,
+			entry_time: toUtcTimestamp(moment().format("HH:mm")),
+			exit_time: toUtcTimestamp(inputs.exit.value),
+			timestamp: moment.utc().valueOf().toString(),
+		};
+
+		try {
+			submitBtn.disabled = true;
+			submitBtn.value = "Submitting...";
+
+			const response = await fetch("http://localhost:5432/submit-attendance", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(details),
+			});
+
+			if (response.ok) {
+				attendanceForm.style.display = "none"; // Hide Form
+				successMsg.removeAttribute("hidden"); // Show Success
+			} else {
+				throw new Error("Server Error");
+			}
+		} catch (err) {
+			console.error("Submission Failed", err);
+			alert("Failed to submit. Check console/server.");
+			submitBtn.disabled = false;
+			submitBtn.value = "Submit Attendance";
+		}
+	});
+</script>
+
+<style>
+	.attendance-modal {
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		align-items: center;
+		margin-top: 4rem;
+		font-family: system-ui, sans-serif;
+		width: 100%;
+		grid-area: main;
+
+		.attendance-form {
+			display: flex;
+			flex-direction: column;
+			gap: 1.2rem;
+			width: 30vw;
+			min-width: 320px;
+			background: white;
+			padding: 2rem;
+			border-radius: 12px;
+			box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+
+			.input-group {
+				display: flex;
+				flex-direction: column;
+				width: 100%;
+			}
+
+			.time-row {
+				display: flex;
+				flex-direction: row;
+				gap: 1rem;
+				width: 100%;
+
+				/* Ensure children take equal width */
+				.input-group {
+					flex: 1;
+				}
+			}
+
+			label {
+				display: flex;
+				flex-direction: column;
+				font-size: 0.85rem;
+				margin-bottom: 0.4rem;
+				width: 100%;
+
+				.default-message {
+					color: #333;
+					font-weight: 600;
+				}
+
+				.error-message {
+					color: #ff5500;
+					font-weight: 500;
+					font-size: 0.75rem;
+					margin-top: 0.2rem;
+				}
+			}
+
+			input {
+				border: 1px solid #ddd;
+				width: 100%;
+				padding: 0.8rem;
+				border-radius: 6px;
+				background-color: #f8f9fa;
+				font-size: 0.95rem;
+				box-sizing: border-box;
+				transition: all 0.2s ease;
+
+				&:focus {
+					outline: none;
+					border-color: #4d7ffe;
+					background-color: #fff;
+					box-shadow: 0 0 0 3px rgba(77, 127, 255, 0.1);
+				}
+
+				&[readonly] {
+					background-color: #e9ecef;
+					cursor: not-allowed;
+					color: #666;
+				}
+
+				&[type="submit"] {
+					cursor: pointer;
+					color: #ffffff;
+					font-weight: 600;
+					background-color: #09d209;
+					border: none;
+					margin-top: 0.5rem;
+
+					&:hover {
+						background-color: #08c908;
+						transform: translateY(-1px);
+					}
+
+					&:disabled {
+						background-color: #ccc;
+						cursor: not-allowed;
+						transform: none;
+					}
+				}
+			}
+		}
+
+		/* Success Message Styling */
+		.success-message {
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			align-items: center;
+			text-align: center;
+			padding: 3rem;
+			background: white;
+			border-radius: 12px;
+			box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+			animation: fadeIn 0.4s ease-out;
+
+			h3 {
+				color: #09d209;
+				margin: 0 0 0.5rem 0;
+				font-size: 1.5rem;
+			}
+
+			p {
+				color: #555;
+				margin: 0;
+			}
+		}
+
+		/* Critical Fix: Ensure hidden actually hides the flex container */
+		.success-message[hidden] {
+			display: none !important;
+		}
+	}
+
+	@keyframes fadeIn {
+		from {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+</style>

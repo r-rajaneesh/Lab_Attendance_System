@@ -1,35 +1,126 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import cookieParser from "cookie-parser";
+import fs, { access } from "fs-extra";
+import { Database } from "bun:sqlite";
 import moment from "moment";
-const app = express();
-const sql = new Bun.SQL("sqlite://attendance.db", {
-	prepare: false,
-});
-app.use(cors(), helmet(), express.json(), express.text());
-sql.connect();
-app.post("/attendance", async (req, res) => {
-	const body = req.body;
-	const roll = body.rollnumber;
-	const system = body.systemnumber ?? "Not specified";
-	const reason = body.reason ?? "Not specified";
-	console.log(roll, system, reason);
-	await sql`INSERT INTO attendance VALUES (${moment().unix()}, ${roll}, ${system}, ${reason})`;
-	res.json({ status: 200, body: { message: "Recieved Attendance" } });
-});
-app.listen(80, "0.0.0.0", async () => {
-	// Enable foreign keys
-	await sql`PRAGMA foreign_keys = ON`;
+import cron from "cron";
 
-	// Set journal mode to WAL for better concurrency
-	await sql`PRAGMA journal_mode = WAL`;
-	await sql`
-    CREATE TABLE IF NOT EXISTS attendance (
-        time TEXT NOT NULL,
-        rollno TEXT,
-        sysno TEXT,
-        reason TEXT
-    );
-    `;
-	console.log("Attendance Dashboard running on http://127.0.0.1");
+const app = express();
+app.use(cors({ credentials: true, origin: ["http://127.0.0.1:4321", "http://localhost:4321"] }));
+app.use(express.json());
+app.use(helmet());
+app.use(cookieParser());
+const db = new Database("./database/lab_attendance_record.db", { create: true });
+await fs.ensureDirSync("./database/");
+db.run("PRAGMA journal_mode = WAL;");
+db.run(
+	"CREATE TABLE IF NOT EXISTS attendance (timestamp TEXT PRIMARY KEY, rollno TEXT, name TEXT, entrytime NUMBER, exittime NUMBER, purpose TEXT)",
+);
+db.run("CREATE TABLE IF NOT EXISTS login (username TEXT, password TEXT)");
+db.run("CREATE TABLE IF NOT EXISTS loggedin (username TEXT, access_token TEXT, expiry_time TEXT)");
+
+const checkAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+	const user_access_token = req.cookies["access_token"];
+	const userdata = await db
+		.query("SELECT * FROM loggedin WHERE access_token = ($user_access_token)")
+		.get({ $user_access_token: user_access_token });
+	console.log(userdata);
+	if (!userdata) {
+		res.status(401).json({ message: "Unauthorised" });
+		return;
+	}
+	next();
+};
+
+// API Endpoints
+app.post("/submit-attendance", async (req, res) => {
+	// JSON.parse(req.body);
+	let attendanceDetails = await req.body;
+	console.log(attendanceDetails);
+	await db
+		.query(
+			"INSERT INTO attendance (timestamp, rollno, name, entrytime, exittime, purpose) VALUES ($timestamp, $rollno, $name, $entrytime, $exittime, $purpose)",
+		)
+		.run({
+			$timestamp: attendanceDetails["timestamp"],
+			$rollno: attendanceDetails["attendance_rollno"],
+			$name: attendanceDetails["attendance_name"],
+			$entrytime: attendanceDetails["entry_time"],
+			$exittime: attendanceDetails["exit_time"],
+			$purpose: attendanceDetails["attendance_purpose"],
+		});
+	res.status(200).json({ message: "Done" });
+});
+
+app.get("/get-attendance", checkAuth, async (req, res) => {
+	console.log(1, "TEST");
+	const details = await req.body;
+	console.log(req.query);
+	const date: string = req.query.date as string;
+	const limit: number = parseInt(req.query.limit as string) as number;
+	const ofset: number = parseInt(req.query.offset as string) as number;
+	console.log({ $dategt: moment(date).utc().unix(), $datelt: moment(date).add(1, "day").utc().unix() });
+	const data = await db
+		.query("SELECT * FROM attendance WHERE entrytime > $date_start")
+		.all({ $date_start: moment(date).utc().unix(), $date_end: moment(date).add(1, "day").utc().unix() });
+	console.log(data)
+	res.status(200).json({ message: "Success", data });
+});
+
+app.post("/admin-login", async (req, res) => {
+	const loginDetails: { login_username: string; login_password: string } = structuredClone(await req.body);
+
+	const loginDetail: { username: string; password: string } = (await db
+		.query(`SELECT * FROM login WHERE username = $username`)
+		.get({ $username: loginDetails["login_username"] })) as { username: string; password: string };
+	console.log(1, loginDetail);
+
+	if (loginDetail.username === loginDetails.login_username && loginDetail.password === loginDetails.login_password) {
+		const access_token = Bun.randomUUIDv7();
+		await db
+			.query(
+				"INSERT INTO loggedin (username, access_token, expiry_time) VALUES ($username, $access_token, $expiry_time)",
+			)
+			.run({
+				$username: loginDetail.username,
+				$access_token: access_token,
+				$expiry_time: moment().utc().add(1, "hour").unix(),
+			});
+		// await res.clearCookie("access_token");
+		await res.cookie("access_token", access_token, {
+			maxAge: 3600000, // 1 hour (1300ms is too short!)
+			httpOnly: false,
+			path: "/",
+			sameSite: "lax",
+			secure: false,
+		});
+		res.status(200).json({
+			message: "Login Successful",
+			redirectUrl: "http://localhost:4321/viewattendance",
+		});
+	} else await res.status(401).json({ message: "Invalid login details" });
+});
+
+app.post("/app-logout", async (req, res) => {
+	const logoutDetails = await req.body;
+	const { access_token } = logoutDetails;
+	const [loggedIntime, username, token] = access_token.split("-");
+	await db.query("DELETE FROM loggedin WHERE username = $username AND access_token = $access_token").run({
+		$username: username,
+		$access_token: token,
+	});
+	await res.clearCookie("access_token");
+	res.status(200).json({ message: "Logout successfully" });
+});
+
+app.listen(5432, "0.0.0.0", () => {
+	const clearExpiredAccessTokenJob = new cron.CronJob("* * * * *", async () => {
+		await db
+			.query("DELETE FROM loggedin WHERE expiry_time < ($current_time)")
+			.run({ $current_time: moment().utc().unix() });
+	});
+	clearExpiredAccessTokenJob.start();
+	console.log("Attendance Portal running on http://localhost:5432");
 });
