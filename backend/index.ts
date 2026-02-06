@@ -8,7 +8,16 @@ import helmet from "helmet";
 import moment from "moment";
 
 const app = express();
-app.use(cors({ credentials: true, origin: ["http://127.0.0.1:4321", "http://localhost:4321"] }));
+const PORT = Number(process.env.PORT) || 5432;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:4321";
+
+// Support both localhost and 127.0.0.1 variants if FRONTEND_URL is localhost
+const corsOrigins = [FRONTEND_URL];
+if (FRONTEND_URL.includes("localhost")) {
+	corsOrigins.push(FRONTEND_URL.replace("localhost", "127.0.0.1"));
+}
+
+app.use(cors({ credentials: true, origin: corsOrigins }));
 app.use(express.json());
 app.use(helmet());
 app.use(cookieParser());
@@ -101,7 +110,7 @@ app.post("/admin-login", async (req, res) => {
 		});
 		res.status(200).json({
 			message: "Login Successful",
-			redirectUrl: "http://localhost:4321/viewattendance",
+			redirectUrl: `${FRONTEND_URL}/viewattendance`,
 		});
 	} else await res.status(401).json({ message: "Invalid login details" });
 });
@@ -118,12 +127,12 @@ app.post("/app-logout", async (req, res) => {
 	res.status(200).json({ message: "Logout successfully" });
 });
 
-app.listen(5432, "0.0.0.0", () => {
+app.listen(PORT, "0.0.0.0", () => {
 	const clearExpiredAccessTokenJob = new cron.CronJob("* * * * *", async () => {
 		await db
 			.query("DELETE FROM loggedin WHERE expiry_time < ($current_time)")
 			.run({ $current_time: moment().utc().unix() });
 	});
 	clearExpiredAccessTokenJob.start();
-	console.log("Attendance Portal running on http://localhost:5432");
+	console.log(`attendance Portal running on http://localhost:${PORT}`);
 });

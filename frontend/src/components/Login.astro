@@ -34,7 +34,8 @@
 		const LoginDetails = new FormData(LoginForm);
 		const LoginDetailsData = Object.fromEntries(LoginDetails.entries());
 		console.log(LoginDetailsData);
-		const loginRes = await fetch("http://localhost:5432/admin-login", {
+		const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:5432";
+		const loginRes = await fetch(`${API_URL}/admin-login`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

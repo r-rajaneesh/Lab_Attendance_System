@@ -211,7 +211,8 @@ const currentLocalTime = moment().format("HH:mm");
 			submitBtn.disabled = true;
 			submitBtn.value = "Submitting...";
 
-			const response = await fetch("http://localhost:5432/submit-attendance", {
+			const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:5432";
+			const response = await fetch(`${API_URL}/submit-attendance`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(details),
