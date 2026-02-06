@@ -16,7 +16,7 @@ const db = new Database("./database/lab_attendance_record.db", { create: true })
 await fs.ensureDirSync("./database/");
 db.run("PRAGMA journal_mode = WAL;");
 db.run(
-	"CREATE TABLE IF NOT EXISTS attendance (timestamp TEXT PRIMARY KEY, rollno TEXT, name TEXT, entrytime NUMBER, exittime NUMBER, purpose TEXT)",
+	"CREATE TABLE IF NOT EXISTS attendance (timestamp TEXT PRIMARY KEY, rollno TEXT, name TEXT, entrytime TEXT, exittime TEXT, purpose TEXT)",
 );
 db.run("CREATE TABLE IF NOT EXISTS login (username TEXT, password TEXT)");
 db.run("CREATE TABLE IF NOT EXISTS loggedin (username TEXT, access_token TEXT, expiry_time TEXT)");
@@ -44,11 +44,11 @@ app.post("/submit-attendance", async (req, res) => {
 			"INSERT INTO attendance (timestamp, rollno, name, entrytime, exittime, purpose) VALUES ($timestamp, $rollno, $name, $entrytime, $exittime, $purpose)",
 		)
 		.run({
-			$timestamp: attendanceDetails["timestamp"],
+			$timestamp: String(attendanceDetails["timestamp"]),
 			$rollno: attendanceDetails["attendance_rollno"],
 			$name: attendanceDetails["attendance_name"],
-			$entrytime: attendanceDetails["entry_time"],
-			$exittime: attendanceDetails["exit_time"],
+			$entrytime: String(attendanceDetails["entry_time"]),
+			$exittime: String(attendanceDetails["exit_time"]),
 			$purpose: attendanceDetails["attendance_purpose"],
 		});
 	res.status(200).json({ message: "Done" });
@@ -60,13 +60,14 @@ app.get("/get-attendance", checkAuth, async (req, res) => {
 
 	const startTimestamp = moment(startDateStr).startOf('day').utc().unix();
 	const endTimestamp = moment(endDateStr).endOf('day').utc().unix();
-
+	console.log(startTimestamp, endTimestamp)
 	const data = await db
 		.query("SELECT * FROM attendance WHERE entrytime >= $start_time AND entrytime <= $end_time")
 		.all({
-			$start_time: startTimestamp,
-			$end_time: endTimestamp
+			$start_time: String(startTimestamp),
+			$end_time: String(endTimestamp)
 		});
+	console.log(data);
 
 	res.status(200).json({ message: "Success", data });
 });
