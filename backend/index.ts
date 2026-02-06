@@ -1,11 +1,11 @@
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import cookieParser from "cookie-parser";
-import fs, { access } from "fs-extra";
 import { Database } from "bun:sqlite";
-import moment from "moment";
+import cookieParser from "cookie-parser";
+import cors from "cors";
 import cron from "cron";
+import express from "express";
+import fs from "fs-extra";
+import helmet from "helmet";
+import moment from "moment";
 
 const app = express();
 app.use(cors({ credentials: true, origin: ["http://127.0.0.1:4321", "http://localhost:4321"] }));
@@ -55,17 +55,19 @@ app.post("/submit-attendance", async (req, res) => {
 });
 
 app.get("/get-attendance", checkAuth, async (req, res) => {
-	console.log(1, "TEST");
-	const details = await req.body;
-	console.log(req.query);
-	const date: string = req.query.date as string;
-	const limit: number = parseInt(req.query.limit as string) as number;
-	const ofset: number = parseInt(req.query.offset as string) as number;
-	console.log({ $dategt: moment(date).utc().unix(), $datelt: moment(date).add(1, "day").utc().unix() });
+	const startDateStr = req.query.startDate as string;
+	const endDateStr = req.query.endDate as string;
+
+	const startTimestamp = moment(startDateStr).startOf('day').utc().unix();
+	const endTimestamp = moment(endDateStr).endOf('day').utc().unix();
+
 	const data = await db
-		.query("SELECT * FROM attendance WHERE entrytime > $date_start")
-		.all({ $date_start: moment(date).utc().unix(), $date_end: moment(date).add(1, "day").utc().unix() });
-	console.log(data)
+		.query("SELECT * FROM attendance WHERE entrytime >= $start_time AND entrytime <= $end_time")
+		.all({
+			$start_time: startTimestamp,
+			$end_time: endTimestamp
+		});
+
 	res.status(200).json({ message: "Success", data });
 });
 

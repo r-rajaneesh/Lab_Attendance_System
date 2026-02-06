@@ -1,27 +1,24 @@
 ---
+
 ---
 
 <div
 	class="attendance-container"
 	id="attendance-app">
 	<div class="control-bar">
-		<div class="date-controls">
-			<button
-				id="btn-prev-day"
-				class="icon-btn"
-				aria-label="Previous Day"
-				>←</button
-			>
+		<div class="date-range-container">
+			<span class="date-label">From:</span>
 			<input
 				type="date"
-				id="date-picker"
+				id="date-picker-start"
+				class="date-input"
 			/>
-			<button
-				id="btn-next-day"
-				class="icon-btn"
-				aria-label="Next Day"
-				>→</button
-			>
+			<span class="date-label">To:</span>
+			<input
+				type="date"
+				id="date-picker-end"
+				class="date-input"
+			/>
 		</div>
 
 		<div class="search-controls">
@@ -66,6 +63,7 @@
 			<thead>
 				<tr id="table-headers">
 					<th data-sort="timestamp">Timestamp (IST) <span class="sort-icon"></span></th>
+					<th>Date</th>
 					<th data-sort="entryTime">Entry Time (IST) <span class="sort-icon"></span></th>
 					<th data-sort="exitTime">Exit Time (IST) <span class="sort-icon"></span></th>
 					<th data-sort="rollNo">Roll Number <span class="sort-icon"></span></th>
@@ -95,8 +93,8 @@
 </div>
 
 <script>
-	import * as XLSX from "xlsx";
 	import moment from "moment-timezone";
+	import * as XLSX from "xlsx";
 
 	interface TAttendanceRaw {
 		id: string;
@@ -119,7 +117,8 @@
 	}
 
 	interface TAppState {
-		currentDate: moment.Moment;
+		startDate: moment.Moment;
+		endDate: moment.Moment;
 		searchQuery: string;
 		pageSize: number;
 		currentPage: number;
@@ -136,10 +135,11 @@
 		};
 	};
 
-	const getAttendanceData = async (dateStr: string, limit: number): Promise<any> => {
+	const getAttendanceData = async (startDate: string, endDate: string, limit: number): Promise<any> => {
 		try {
 			const url = new URL("http://localhost:5432/get-attendance");
-			url.searchParams.append("date", dateStr);
+			url.searchParams.append("startDate", startDate);
+			url.searchParams.append("endDate", endDate);
 			url.searchParams.append("limit", limit.toString());
 
 			const response = await fetch(url.toString(), {
@@ -171,7 +171,8 @@
 
 		elements = {
 			tbody: document.getElementById("table-body") as HTMLTableSectionElement,
-			datePicker: document.getElementById("date-picker") as HTMLInputElement,
+			datePickerStart: document.getElementById("date-picker-start") as HTMLInputElement,
+			datePickerEnd: document.getElementById("date-picker-end") as HTMLInputElement,
 			searchInput: document.getElementById("search-input") as HTMLInputElement,
 			pageSize: document.getElementById("page-size-select") as HTMLSelectElement,
 			pageInfo: document.getElementById("page-info") as HTMLSpanElement,
@@ -188,7 +189,8 @@
 
 		constructor() {
 			this.state = {
-				currentDate: moment.utc().startOf("day"),
+				startDate: moment.utc().startOf("day"),
+				endDate: moment.utc().endOf("day"),
 				searchQuery: "",
 				pageSize: 10,
 				currentPage: 1,
@@ -200,7 +202,6 @@
 			this.initListeners();
 			this.loadData();
 		}
-
 
 		renderStatusRow(message: string, isError: boolean = false) {
 			this.elements.tbody.innerHTML = "";
@@ -223,7 +224,6 @@
 			this.elements.tbody.appendChild(tr);
 		}
 
-
 		createCell(text: string, className?: string): HTMLTableCellElement {
 			const td = document.createElement("td");
 			td.textContent = text;
@@ -231,16 +231,14 @@
 			return td;
 		}
 
-
 		async loadData() {
 			this.renderStatusRow("Refreshing Data...");
 
-
-			const dateParam = this.formatInputDate(this.state.currentDate);
-			const rawResponse = await getAttendanceData(dateParam, 100);
+			const startParam = this.formatInputDate(this.state.startDate);
+			const endParam = this.formatInputDate(this.state.endDate);
+			const rawResponse = await getAttendanceData(startParam, endParam, 1000);
 
 			if (rawResponse) {
-
 				if (rawResponse.message === "WIP") {
 					this.renderStatusRow("Backend API is Work In Progress 🚧", false);
 					return;
@@ -291,18 +289,22 @@
 		}
 
 		getProcessedData() {
-			const startOfDay = this.state.currentDate.clone().startOf("day").valueOf();
-			const endOfDay = this.state.currentDate.clone().endOf("day").valueOf();
+			// Backend now handles the primary date range filtering, but we keep this consistent with state
+			// In case we want to do more granular client-side filtering later
+			const startRange = this.state.startDate.clone().startOf("day").valueOf();
+			const endRange = this.state.endDate.clone().endOf("day").valueOf();
 
 			let processed = this.state.data.filter((row) => {
-				return row.timestamp >= startOfDay && row.timestamp <= endOfDay;
+				return row.timestamp >= startRange && row.timestamp <= endRange;
 			});
 
 			if (this.state.searchQuery) {
 				const q = this.state.searchQuery.toLowerCase();
 				processed = processed.filter(
 					(row) =>
-						row.name.toLowerCase().includes(q) || row.rollNo.includes(q) || row.purpose.toLowerCase().includes(q),
+						row.name.toLowerCase().includes(q) ||
+						row.rollNo.includes(q) ||
+						row.purpose.toLowerCase().includes(q),
 				);
 			}
 
@@ -320,7 +322,8 @@
 		}
 
 		render() {
-			this.elements.datePicker.value = this.formatInputDate(this.state.currentDate);
+			this.elements.datePickerStart.value = this.formatInputDate(this.state.startDate);
+			this.elements.datePickerEnd.value = this.formatInputDate(this.state.endDate);
 
 			const allFiltered = this.getProcessedData();
 			const total = allFiltered.length;
@@ -347,6 +350,7 @@
 					tr.classList.add("fade-in");
 
 					tr.appendChild(this.createCell(row.timestamp.toString()));
+					tr.appendChild(this.createCell(this.formatDateDisplay(row.timestamp)));
 					tr.appendChild(this.createCell(this.formatTimeDisplay(row.entryTime)));
 					tr.appendChild(this.createCell(this.formatTimeDisplay(row.exitTime)));
 					tr.appendChild(this.createCell(row.rollNo, "mono"));
@@ -375,18 +379,27 @@
 		}
 
 		initListeners() {
-			const changeDate = (offset: number) => {
-				this.state.currentDate.add(offset, "days");
-				this.state.currentPage = 1;
-				this.loadData();
-			};
-			document.getElementById("btn-prev-day")?.addEventListener("click", () => changeDate(-1));
-			document.getElementById("btn-next-day")?.addEventListener("click", () => changeDate(1));
-
-			this.elements.datePicker.addEventListener("change", (e) => {
+			this.elements.datePickerStart.addEventListener("change", (e) => {
 				const val = (e.target as HTMLInputElement).value;
 				if (val) {
-					this.state.currentDate = moment.utc(val, "YYYY-MM-DD");
+					this.state.startDate = moment.utc(val, "YYYY-MM-DD");
+					// Ensure end date is not before start date
+					if (this.state.endDate.isBefore(this.state.startDate)) {
+						this.state.endDate = this.state.startDate.clone();
+					}
+					this.state.currentPage = 1;
+					this.loadData();
+				}
+			});
+
+			this.elements.datePickerEnd.addEventListener("change", (e) => {
+				const val = (e.target as HTMLInputElement).value;
+				if (val) {
+					this.state.endDate = moment.utc(val, "YYYY-MM-DD");
+					// Ensure start date is not after end date
+					if (this.state.startDate.isAfter(this.state.endDate)) {
+						this.state.startDate = this.state.endDate.clone();
+					}
 					this.state.currentPage = 1;
 					this.loadData();
 				}
@@ -432,7 +445,8 @@
 			});
 
 			document.getElementById("btn-reset")?.addEventListener("click", () => {
-				this.state.currentDate = moment.utc().startOf("day");
+				this.state.startDate = moment.utc().startOf("day");
+				this.state.endDate = moment.utc().endOf("day");
 				this.state.searchQuery = "";
 				this.state.pageSize = 10;
 				this.state.currentPage = 1;
@@ -455,7 +469,10 @@
 				const ws = XLSX.utils.json_to_sheet(data);
 				const wb = XLSX.utils.book_new();
 				XLSX.utils.book_append_sheet(wb, ws, "Attendance");
-				XLSX.writeFile(wb, `Attendance_${this.formatInputDate(this.state.currentDate)}.xlsx`);
+				XLSX.writeFile(
+					wb,
+					`Attendance_${this.formatInputDate(this.state.startDate)}_to_${this.formatInputDate(this.state.endDate)}.xlsx`,
+				);
 			});
 		}
 	}
@@ -466,7 +483,6 @@
 </script>
 
 <style>
-	/* ... (Same CSS as previous steps) ... */
 	.attendance-container {
 		font-family: "Inter", system-ui, sans-serif;
 		display: flex;
@@ -489,15 +505,28 @@
 			border-radius: 12px;
 			box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 
-			.date-controls {
+			.date-range-container {
 				display: flex;
 				align-items: center;
 				gap: 0.5rem;
 
-				input {
+				.date-label {
+					font-weight: 500;
+					color: #495057;
+					margin-right: 0.2rem;
+				}
+
+				.date-input {
 					padding: 0.5rem;
 					border: 1px solid #ddd;
 					border-radius: 6px;
+					font-family: inherit;
+					color: #495057;
+
+					&:focus {
+						outline: 2px solid #228be6;
+						border-color: transparent;
+					}
 				}
 			}
 
